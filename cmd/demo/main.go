@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	catcmd "github.com/cagatayozata/ddd-library-lending/internal/catalog/application/command"
-	"github.com/cagatayozata/ddd-library-lending/internal/catalog/domain"
+	catapp "github.com/cagatayozata/ddd-library-lending/internal/catalog/application"
+	catalog "github.com/cagatayozata/ddd-library-lending/internal/catalog/domain"
 	catmem "github.com/cagatayozata/ddd-library-lending/internal/catalog/infrastructure/memory"
-	lendcmd "github.com/cagatayozata/ddd-library-lending/internal/lending/application/command"
+	lendapp "github.com/cagatayozata/ddd-library-lending/internal/lending/application"
 	lending "github.com/cagatayozata/ddd-library-lending/internal/lending/domain"
 	lendmem "github.com/cagatayozata/ddd-library-lending/internal/lending/infrastructure/memory"
 	shared "github.com/cagatayozata/ddd-library-lending/internal/shared/domain"
@@ -18,36 +18,41 @@ func main() {
 	books := catmem.NewBookRepository()
 	loans := lendmem.NewLoanRepository()
 
-	isbn, err := domain.NewISBN("9780132350884")
+	isbn, err := catalog.NewISBN("9780132350884")
 	must(err)
 
-	book, registered, err := catcmd.RegisterBookHandler{Books: books}.Handle(catcmd.RegisterBookCommand{
+	register := catapp.RegisterBook{Books: books}
+	book, err := register.Handle(catapp.RegisterBookRequest{
 		ISBN: isbn, Title: "Clean Code", Author: "Robert C. Martin", Copies: 3,
 	}, now)
 	must(err)
 
 	fmt.Println("=== catalog ===")
 	fmt.Printf("%q by %s | copies=%d | events=%v\n",
-		book.Title(), book.Author(), book.Copies().Available(), names(registered))
+		book.Title(), book.Author(), book.Copies().Available(), eventNames(book.PullEvents()))
 
+	loanID, _ := lending.NewLoanID("L-100")
 	member, _ := lending.NewMemberID("M-42")
-	loan, borrowed, err := lendcmd.BorrowBookHandler{Books: books, Loans: loans}.Handle(lendcmd.BorrowBookCommand{
-		LoanID: "L-100", MemberID: member, ISBN: isbn,
+	borrow := lendapp.BorrowBook{Books: books, Loans: loans}
+	loan, err := borrow.Handle(lendapp.BorrowBookRequest{
+		LoanID: loanID, MemberID: member, ISBN: isbn,
 	}, now)
 	must(err)
 
-	fmt.Println("\n=== lending (refs ISBN only) ===")
+	fmt.Println("\n=== lending (via Loan aggregate root) ===")
 	fmt.Printf("loan %s | member=%s | isbn=%s | due=%s | status=%s | events=%v\n",
-		loan.ID(), loan.MemberID(), loan.ISBN(), loan.DueDate(), loan.Status(), names(borrowed))
+		loan.ID(), loan.MemberID(), loan.ISBN(), loan.DueDate(), loan.Status(), eventNames(loan.PullEvents()))
 
-	renewed, err := lendcmd.RenewLoanHandler{Loans: loans}.Handle("L-100", now.Add(24*time.Hour))
+	renew := lendapp.RenewLoan{Loans: loans}
+	loan, err = renew.Handle(loanID, now.Add(24*time.Hour))
 	must(err)
-	fmt.Printf("renewed | due=%s | events=%v\n", loan.DueDate(), names(renewed))
+	fmt.Printf("renewed | due=%s | events=%v\n", loan.DueDate(), eventNames(loan.PullEvents()))
 
-	returned, err := lendcmd.ReturnBookHandler{Books: books, Loans: loans}.Handle("L-100", now.Add(48*time.Hour))
+	ret := lendapp.ReturnBook{Books: books, Loans: loans}
+	loan, err = ret.Handle(loanID, now.Add(48*time.Hour))
 	must(err)
 	stored, _ := books.FindByISBN(isbn)
-	fmt.Printf("returned | events=%v | catalog copies=%d\n", names(returned), stored.Copies().Available())
+	fmt.Printf("returned | events=%v | catalog copies=%d\n", eventNames(loan.PullEvents()), stored.Copies().Available())
 }
 
 func must(err error) {
@@ -56,7 +61,7 @@ func must(err error) {
 	}
 }
 
-func names(evts []shared.DomainEvent) []string {
+func eventNames(evts []shared.DomainEvent) []string {
 	out := make([]string, len(evts))
 	for i, e := range evts {
 		out[i] = e.EventName()

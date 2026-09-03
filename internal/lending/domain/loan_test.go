@@ -6,11 +6,12 @@ import (
 )
 
 func TestBorrow_CreatesActiveLoan(t *testing.T) {
+	id, _ := NewLoanID("L-1")
 	member, _ := NewMemberID("M-1")
 	isbn, _ := NewISBN("9780132350884")
 	at := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
 
-	loan, err := Borrow("L-1", member, isbn, at)
+	loan, err := Borrow(id, member, isbn, at)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,12 +58,26 @@ func TestRenew_ExtendsDueDate(t *testing.T) {
 	}
 }
 
+func TestLoanID_MemberID_AreValueObjects(t *testing.T) {
+	a, _ := NewLoanID("L-1")
+	b, _ := NewLoanID("L-1")
+	if !a.Equals(b) {
+		t.Fatal("loan id equality")
+	}
+	m1, _ := NewMemberID("M-1")
+	m2, _ := NewMemberID("M-1")
+	if !m1.Equals(m2) {
+		t.Fatal("member id equality")
+	}
+}
+
 func mustLoan(t *testing.T) *Loan {
 	t.Helper()
+	id, _ := NewLoanID("L-1")
 	member, _ := NewMemberID("M-1")
 	isbn, _ := NewISBN("9780132350884")
 	at := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
-	loan, err := Borrow("L-1", member, isbn, at)
+	loan, err := Borrow(id, member, isbn, at)
 	if err != nil {
 		t.Fatal(err)
 	}

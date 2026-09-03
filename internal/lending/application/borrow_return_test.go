@@ -1,13 +1,13 @@
-package command_test
+package application_test
 
 import (
 	"testing"
 	"time"
 
-	catcmd "github.com/cagatayozata/ddd-library-lending/internal/catalog/application/command"
+	catapp "github.com/cagatayozata/ddd-library-lending/internal/catalog/application"
+	catalog "github.com/cagatayozata/ddd-library-lending/internal/catalog/domain"
 	catmem "github.com/cagatayozata/ddd-library-lending/internal/catalog/infrastructure/memory"
-	"github.com/cagatayozata/ddd-library-lending/internal/catalog/domain"
-	lendcmd "github.com/cagatayozata/ddd-library-lending/internal/lending/application/command"
+	lendapp "github.com/cagatayozata/ddd-library-lending/internal/lending/application"
 	lending "github.com/cagatayozata/ddd-library-lending/internal/lending/domain"
 	lendmem "github.com/cagatayozata/ddd-library-lending/internal/lending/infrastructure/memory"
 )
@@ -17,23 +17,24 @@ func TestBorrowAndReturn_Flow(t *testing.T) {
 	books := catmem.NewBookRepository()
 	loans := lendmem.NewLoanRepository()
 
-	isbn, err := domain.NewISBN("9780132350884")
+	isbn, err := catalog.NewISBN("9780132350884")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	register := catcmd.RegisterBookHandler{Books: books}
-	_, _, err = register.Handle(catcmd.RegisterBookCommand{
+	register := catapp.RegisterBook{Books: books}
+	_, err = register.Handle(catapp.RegisterBookRequest{
 		ISBN: isbn, Title: "Clean Code", Author: "Robert C. Martin", Copies: 2,
 	}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	loanID, _ := lending.NewLoanID("L-1")
 	member, _ := lending.NewMemberID("M-1")
-	borrow := lendcmd.BorrowBookHandler{Books: books, Loans: loans}
-	loan, evts, err := borrow.Handle(lendcmd.BorrowBookCommand{
-		LoanID: "L-1", MemberID: member, ISBN: isbn,
+	borrow := lendapp.BorrowBook{Books: books, Loans: loans}
+	loan, err := borrow.Handle(lendapp.BorrowBookRequest{
+		LoanID: loanID, MemberID: member, ISBN: isbn,
 	}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -41,20 +42,23 @@ func TestBorrowAndReturn_Flow(t *testing.T) {
 	if loan.Status() != lending.LoanActive {
 		t.Fatalf("status=%s", loan.Status())
 	}
-	if len(evts) != 1 || evts[0].EventName() != "LoanBorrowed" {
-		t.Fatalf("events=%#v", evts)
-	}
 
-	book, _ := books.FindByISBN(isbn)
+	book, err := books.FindByISBN(isbn)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if book.Copies().Available() != 1 {
 		t.Fatalf("available=%d", book.Copies().Available())
 	}
 
-	ret := lendcmd.ReturnBookHandler{Books: books, Loans: loans}
-	if _, err = ret.Handle("L-1", now.Add(24*time.Hour)); err != nil {
+	ret := lendapp.ReturnBook{Books: books, Loans: loans}
+	if _, err = ret.Handle(loanID, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	book, _ = books.FindByISBN(isbn)
+	book, err = books.FindByISBN(isbn)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if book.Copies().Available() != 2 {
 		t.Fatalf("available=%d", book.Copies().Available())
 	}

@@ -24,31 +24,33 @@ Members **borrow**, **renew**, and **return** books. The catalog owns shelf copi
 ## Architecture
 
 ```text
-Command → Command Handler → Domain (aggregate) → Repository port
-                                    ↑
-                         infrastructure adapter (in-memory)
+(Controller or thin app proxy)
+        →  Aggregate Root (Book / Loan)
+        →  Repository port
+                ↑
+         in-memory adapter
 ```
 
 | Bounded context | Aggregate root | Notes |
 |-----------------|----------------|--------|
-| `catalog` | `Book` | Owns available copies |
-| `lending` | `Loan` | References `ISBN` only |
-| `shared` | `AggregateRoot`, `DomainEvent`, `Invariants` | Shared tactical pieces |
+| `catalog` | `Book` | Owns available copies; raises its own events |
+| `lending` | `Loan` | References `ISBN` only; raises its own events |
+| `shared` | `DomainEvent` interface only | No shared `AggregateRoot` base type |
 
 ## Layout
 
 ```text
 internal/
-  shared/domain/           # AggregateRoot, DomainEvent, Invariants
+  shared/domain/           # DomainEvent interface only
   catalog/
-    domain/                # Book, ISBN, Copies, domain events, repo port
-    application/command/   # RegisterBook
+    domain/                # Book (AR), ISBN, Copies, events, repo port
+    application/           # thin RegisterBook proxy
     infrastructure/memory/
   lending/
-    domain/                # Loan, DueDate, status, domain events, repo port
-    application/command/   # BorrowBook, RenewLoan, ReturnBook
+    domain/                # Loan (AR), LoanID/MemberID/ISBN/DueDate VOs, events
+    application/           # thin Borrow / Renew / Return proxies
     infrastructure/memory/
-cmd/demo/                  # end-to-end walkthrough
+cmd/demo/
 ```
 
 ## Concept → code
@@ -56,16 +58,16 @@ cmd/demo/                  # end-to-end walkthrough
 | Concept | Where |
 |---------|--------|
 | Rich domain | `Loan.Renew`, `Loan.Return`, `Book.ReserveCopy` |
-| Anemic vs rich | rich behaviour lives on aggregates/VOs (not anemic setters + service ifs) |
-| Value Object | `ISBN`, `Copies`, `DueDate`, typed IDs |
-| Entity / Aggregate Root | `Book`, `Loan` (+ `shared.AggregateRoot`) |
-| Aggregate | Book owns copy count; Loan owns due date / status |
-| Domain Event | `BookRegistered`, `LoanBorrowed`, `LoanReturned`, … |
+| Anemic vs rich | rules on the root — not in application if-chains |
+| Value Object | `ISBN`, `Copies`, `DueDate`, `LoanID`, `MemberID` |
+| Entity / Aggregate Root | `Book`, `Loan` themselves (no shared AR base) |
+| Aggregate | Book owns copies; Loan owns due date / status |
+| Domain Event | collected on the root (`PullEvents`) |
 | Bounded Context | `catalog` vs `lending` |
 | Ubiquitous Language | `Borrow`, `Renew`, `Return`, `RegisterBook` |
-| CQRS L1 (commands) | `application/command` handlers |
+| Application proxy | load → root method → save (optional; not CQRS) |
 | Repository port/adapter | domain ports → `infrastructure/memory` |
-| TDD | domain + handler `*_test.go` files |
+| TDD | domain + application `*_test.go` files |
 
 ## Run
 

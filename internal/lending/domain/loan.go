@@ -2,69 +2,10 @@ package domain
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	shared "github.com/cagatayozata/ddd-library-lending/internal/shared/domain"
 )
-
-// ISBN mirrors catalog identity — lending never imports Book, only this value.
-type ISBN struct {
-	value string
-}
-
-func NewISBN(raw string) (ISBN, error) {
-	v := strings.ReplaceAll(strings.TrimSpace(raw), "-", "")
-	if len(v) != 10 && len(v) != 13 {
-		return ISBN{}, fmt.Errorf("isbn: must be 10 or 13 digits")
-	}
-	return ISBN{value: v}, nil
-}
-
-func (i ISBN) String() string { return i.value }
-
-type MemberID string
-
-func NewMemberID(raw string) (MemberID, error) {
-	if strings.TrimSpace(raw) == "" {
-		return "", fmt.Errorf("member id: empty")
-	}
-	return MemberID(raw), nil
-}
-
-func (m MemberID) String() string { return string(m) }
-
-type LoanID string
-
-func NewLoanID(raw string) (LoanID, error) {
-	if raw == "" {
-		return "", fmt.Errorf("loan id: empty")
-	}
-	return LoanID(raw), nil
-}
-
-func (id LoanID) String() string { return string(id) }
-
-// DueDate is a Value Object (date-only semantics).
-type DueDate struct {
-	day time.Time
-}
-
-func NewDueDate(t time.Time) DueDate {
-	utc := t.UTC()
-	return DueDate{day: time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)}
-}
-
-func DueDateFromDays(from time.Time, days int) DueDate {
-	return NewDueDate(from.AddDate(0, 0, days))
-}
-
-func (d DueDate) AddDays(days int) DueDate { return NewDueDate(d.day.AddDate(0, 0, days)) }
-func (d DueDate) IsBefore(t time.Time) bool {
-	return d.day.Before(NewDueDate(t).day)
-}
-func (d DueDate) Equals(other DueDate) bool { return d.day.Equal(other.day) }
-func (d DueDate) String() string            { return d.day.Format("2006-01-02") }
 
 type LoanStatus string
 
@@ -79,27 +20,27 @@ const (
 	MaxRenewals     = 2
 )
 
-// Loan is the Aggregate Root of the lending bounded context.
+// Loan is the aggregate root of the lending bounded context.
+// Rules (overdue, renew limits, return once) live here — not in application handlers.
 type Loan struct {
-	shared.AggregateRoot
-
 	id         LoanID
 	memberID   MemberID
 	isbn       ISBN
 	dueDate    DueDate
 	status     LoanStatus
 	renewCount int
+	events     []shared.DomainEvent
 }
 
 func Borrow(id LoanID, member MemberID, isbn ISBN, at time.Time) (*Loan, error) {
-	if err := shared.RequirePresent(id, "loan.id"); err != nil {
-		return nil, err
+	if id.IsZero() {
+		return nil, fmt.Errorf("loan: id is required")
 	}
-	if err := shared.RequirePresent(member, "member.id"); err != nil {
-		return nil, err
+	if member.IsZero() {
+		return nil, fmt.Errorf("loan: member is required")
 	}
-	if isbn.value == "" {
-		return nil, fmt.Errorf("invariant: isbn is required")
+	if isbn.IsZero() {
+		return nil, fmt.Errorf("loan: isbn is required")
 	}
 	loan := &Loan{
 		id:       id,
@@ -108,7 +49,7 @@ func Borrow(id LoanID, member MemberID, isbn ISBN, at time.Time) (*Loan, error) 
 		dueDate:  DueDateFromDays(at, DefaultLoanDays),
 		status:   LoanActive,
 	}
-	loan.Raise(LoanBorrowed{LoanID: id, MemberID: member, ISBN: isbn, OccurredAt: at.UTC()})
+	loan.raise(LoanBorrowed{LoanID: id, MemberID: member, ISBN: isbn, OccurredAt: at.UTC()})
 	return loan, nil
 }
 
@@ -128,7 +69,7 @@ func (l *Loan) Return(at time.Time) error {
 		return fmt.Errorf("loan: already returned")
 	}
 	l.status = LoanReturned
-	l.Raise(LoanReturnedEvent{LoanID: l.id, OccurredAt: at.UTC()})
+	l.raise(LoanReturnedEvent{LoanID: l.id, OccurredAt: at.UTC()})
 	return nil
 }
 
@@ -144,6 +85,22 @@ func (l *Loan) Renew(now time.Time) error {
 	}
 	l.dueDate = l.dueDate.AddDays(RenewExtraDays)
 	l.renewCount++
-	l.Raise(LoanRenewed{LoanID: l.id, DueDate: l.dueDate, OccurredAt: now.UTC()})
+	l.raise(LoanRenewed{LoanID: l.id, DueDate: l.dueDate, OccurredAt: now.UTC()})
 	return nil
+}
+
+func (l *Loan) DomainEvents() []shared.DomainEvent {
+	out := make([]shared.DomainEvent, len(l.events))
+	copy(out, l.events)
+	return out
+}
+
+func (l *Loan) PullEvents() []shared.DomainEvent {
+	out := l.DomainEvents()
+	l.events = nil
+	return out
+}
+
+func (l *Loan) raise(e shared.DomainEvent) {
+	l.events = append(l.events, e)
 }
